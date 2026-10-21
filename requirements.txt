@@ -1,0 +1,3 @@
+# Versiones VULNERABLES a propósito (ejercicio de clase).
+requests==2.19.1
+urllib3==1.23

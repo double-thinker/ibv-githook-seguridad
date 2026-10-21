@@ -1,0 +1,90 @@
+#!/usr/bin/env bash
+# Hook pre-commit de seguridad (versionado en .githooks/).
+# Etapa 1 (bloqueante): escáner real de dependencias con pip-audit.
+# Etapa 2 (opcional): revisión del diff por un agente de IA (claude o codex).
+set -uo pipefail
+
+ROOT="$(git rev-parse --show-toplevel)"
+cd "$ROOT"
+HOOKDIR="$ROOT/.githooks"
+
+echo "== [1/2] Escaneo de dependencias (pip-audit) =="
+
+PIP_AUDIT="$ROOT/.venv/bin/pip-audit"
+if [ ! -x "$PIP_AUDIT" ]; then
+  echo "ERROR: no encuentro .venv/bin/pip-audit. Ejecuta primero ./setup.sh"
+  exit 1
+fi
+
+if [ -f requirements.txt ]; then
+  if ! "$PIP_AUDIT" -r requirements.txt --progress-spinner off; then
+    echo
+    echo "############################################################"
+    echo "COMMIT BLOQUEADO: requirements.txt tiene dependencias con"
+    echo "vulnerabilidades conocidas (ver tabla de arriba)."
+    echo
+    echo "Qué hacer:"
+    echo "  1. Mira la columna 'Fix Versions' de cada paquete."
+    echo "  2. Sube la versión en requirements.txt a una sin fallos"
+    echo "     (o pídeselo a tu agente: \"arregla las vulnerabilidades"
+    echo "     que reporta pip-audit en requirements.txt\")."
+    echo "  3. git add requirements.txt && git commit de nuevo."
+    echo "############################################################"
+    exit 1
+  fi
+fi
+
+# Alternativa para otros ecosistemas (PHP/Joomla con composer.lock, Node con
+# package-lock.json...): osv-scanner, de Google, entiende muchos lockfiles.
+# osv-scanner scan source -r . || { echo "COMMIT BLOQUEADO: vulnerabilidades (osv-scanner)"; exit 1; }
+
+echo
+echo "== [2/2] Revisión del diff por agente de IA (opcional) =="
+
+if [ "${AGENT_REVIEW:-1}" = "0" ]; then
+  echo "Revisión por agente desactivada (AGENT_REVIEW=0)."
+  exit 0
+fi
+
+DIFF="$(git diff --cached)"
+if [ -z "$DIFF" ]; then
+  echo "No hay cambios en stage, nada que revisar."
+  exit 0
+fi
+
+PROMPT="$(cat "$HOOKDIR/agent-review-prompt.txt")
+$DIFF"
+TIMEOUT="${AGENT_REVIEW_TIMEOUT:-120}"
+
+if command -v claude >/dev/null 2>&1; then
+  echo "Usando claude -p (solo lectura, timeout ${TIMEOUT}s)..."
+  OUT="$(printf '%s' "$PROMPT" | timeout "$TIMEOUT" claude -p --tools "" 2>&1)"
+  RC=$?
+elif command -v codex >/dev/null 2>&1; then
+  echo "Usando codex exec (sandbox read-only, timeout ${TIMEOUT}s)..."
+  OUT="$(printf '%s' "$PROMPT" | timeout "$TIMEOUT" codex exec --sandbox read-only - 2>&1)"
+  RC=$?
+else
+  echo "Aviso: no hay claude ni codex instalados. Se omite la revisión por agente."
+  exit 0
+fi
+
+if [ $RC -ne 0 ]; then
+  echo "Aviso: el agente falló o superó el timeout (código $RC). Se omite."
+  exit 0
+fi
+
+echo "$OUT"
+
+if echo "$OUT" | grep -q "VEREDICTO: BLOQUEAR"; then
+  if [ "${AGENT_REVIEW_STRICT:-0}" = "1" ]; then
+    echo
+    echo "COMMIT BLOQUEADO por la revisión del agente (AGENT_REVIEW_STRICT=1)."
+    echo "Corrige los hallazgos de arriba y vuelve a intentarlo."
+    exit 1
+  fi
+  echo
+  echo "Aviso: el agente recomienda bloquear, pero el modo estricto está apagado."
+  echo "Revisa los hallazgos. Para que bloquee: AGENT_REVIEW_STRICT=1 git commit ..."
+fi
+exit 0
