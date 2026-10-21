@@ -32,7 +32,7 @@ setup.sh                        crea .venv con pip-audit y activa los hooks
 ## Puesta en marcha
 
 ```bash
-git clone https://github.com/double-thinker/ibv-githook-seguridad.git
+git clone https://lan-git.ibv.org/grupo-2-uis/ibv-githook-seguridad.git
 cd ibv-githook-seguridad
 ./setup.sh
 ```
